@@ -1,0 +1,21 @@
+llm:
+  provider: deepseek
+  endpoint: "https://api.deepseek.com/chat/completions"
+  model: "deepseek-v4-pro"
+  api-key: "PUT_YOUR_DEEPSEEK_API_KEY_HERE"
+  temperature: 0.2
+  max-output-tokens: 1200
+agent:
+  survival-mode: true
+  max-actions-per-plan: 30
+  max-distance-from-owner: 64
+  action-reach: 4.5
+  follow-distance: 2.5
+  follow-update-ticks: 5
+  search-radius: 12
+  auto-pickup: true
+  auto-pickup-radius: 2.5
+  protect-radius: 10
+  attack-cooldown-ticks: 1
+  max-tree-blocks: 64
+  max-vein-blocks: 32

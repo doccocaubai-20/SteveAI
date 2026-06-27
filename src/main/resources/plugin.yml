@@ -1,0 +1,16 @@
+name: StevePaperAI
+version: ${version}
+main: dev.steveai.StevePaperAIPlugin
+api-version: '1.20'
+author: steve-ai
+depend:
+  - Citizens
+commands:
+  steve:
+    description: Control AI Steve agents.
+    usage: /steve <spawn|remove|ask|inventory|cleanup|adopt|stop|status|reload>
+    permission: steveai.command
+permissions:
+  steveai.command:
+    description: Allows using Steve AI commands.
+    default: op
