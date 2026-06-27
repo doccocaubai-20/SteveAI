@@ -63,6 +63,7 @@ public final class TaskRunner {
     private final Map<String, List<Location>> miningTargets = new java.util.HashMap<>();
     private final Map<String, Location> lastLocations = new java.util.HashMap<>();
     private final Map<String, Integer> stuckTicks = new java.util.HashMap<>();
+    private final Map<String, Location> lastFollowTargets = new java.util.HashMap<>();
     private BukkitTask task;
 
     public TaskRunner(JavaPlugin plugin, AgentManager agentManager, CitizensNpcController npcController, AgentStore agentStore) {
@@ -96,6 +97,7 @@ public final class TaskRunner {
         miningTargets.remove(key);
         lastLocations.remove(key);
         stuckTicks.remove(key);
+        lastFollowTargets.remove(key);
         agent.setBusy(false);
         agent.setFollowing(false);
         agent.setProtecting(false);
@@ -148,7 +150,7 @@ public final class TaskRunner {
             case "move_near_block" -> moveNearBlock(agent, owner, action);
             case "break_owner_target_block" -> breakOwnerTargetBlock(agent, owner, queue, action);
             case "break_nearest_block" -> breakNearestBlock(agent, owner, queue, action);
-            case "collect_items" -> collectItems(agent, owner, action.radius());
+            case "collect_items" -> collectItems(agent, owner, queue, action);
             case "equip_best_tool" -> equipBestTool(agent, owner, action.material());
             case "place_block" -> placeBlock(agent, owner, queue, action);
             case "chop_tree" -> chopTree(agent, owner, queue, action);
@@ -247,10 +249,23 @@ public final class TaskRunner {
             return;
         }
         Optional<Location> current = npcController.currentLocation(agent);
+        if (current.isEmpty()) {
+            return;
+        }
+        String key = agent.getName().toLowerCase(Locale.ROOT);
+        Location lastTarget = lastFollowTargets.get(key);
+        Location ownerLoc = owner.getLocation();
+
         double followDistance = plugin.getConfig().getDouble("agent.follow-distance", 4.0D);
-        if (current.isEmpty() || current.get().getWorld() != owner.getWorld()
-            || current.get().distanceSquared(owner.getLocation()) > followDistance * followDistance) {
-            npcController.moveNearOwner(agent, owner);
+        if (current.get().getWorld() != ownerLoc.getWorld()
+            || current.get().distanceSquared(ownerLoc) > followDistance * followDistance) {
+
+            // Only update Citizens target if owner has moved > 2.0 blocks from the last set target
+            if (lastTarget == null || lastTarget.getWorld() != ownerLoc.getWorld()
+                || lastTarget.distanceSquared(ownerLoc) > 2.0D * 2.0D) {
+                npcController.moveNearOwner(agent, owner);
+                lastFollowTargets.put(key, ownerLoc.clone());
+            }
         }
     }
 
@@ -499,19 +514,51 @@ public final class TaskRunner {
         agent.remember("Broke block by hand: " + material.name());
     }
 
-    private void collectItems(SteveAgent agent, Player owner, int radius) {
+    private void collectItems(SteveAgent agent, Player owner, ArrayDeque<PlanAction> queue, PlanAction action) {
         Location center = npcController.currentLocation(agent).orElse(owner == null ? agent.getLocation() : owner.getLocation());
-        int collected = 0;
+        int radius = Math.max(1, Math.min(action.radius(), 12));
+
+        Item nearestItem = null;
+        double nearestDistSq = Double.MAX_VALUE;
         for (Entity entity : center.getWorld().getNearbyEntities(center, radius, radius, radius)) {
             if (entity instanceof Item item) {
-                ItemStack stack = item.getItemStack();
-                agent.addItem(stack.getType(), stack.getAmount());
-                item.remove();
-                collected += stack.getAmount();
+                if (item.isDead() || !item.isValid()) {
+                    continue;
+                }
+                if (owner != null && !withinOwnerDistance(owner, item.getLocation())) {
+                    continue;
+                }
+                double distSq = item.getLocation().distanceSquared(center);
+                if (distSq < nearestDistSq) {
+                    nearestItem = item;
+                    nearestDistSq = distSq;
+                }
             }
         }
-        if (owner != null) {
-            owner.sendMessage(ChatColor.GREEN + agent.getName() + ChatColor.GRAY + " collected " + collected + " item(s). Inventory: " + agent.inventorySummary());
+
+        if (nearestItem == null) {
+            if (owner != null) {
+                owner.sendMessage(ChatColor.GREEN + agent.getName() + ChatColor.GRAY + " finished collecting nearby items.");
+            }
+            return;
+        }
+
+        if (nearestDistSq > 1.5D * 1.5D) {
+            npcController.moveTo(agent, nearestItem.getLocation());
+            queue.addFirst(action);
+        } else {
+            ItemStack stack = nearestItem.getItemStack();
+            agent.addItem(stack.getType(), stack.getAmount());
+            nearestItem.remove();
+
+            Location loc = nearestItem.getLocation();
+            loc.getWorld().playSound(loc, Sound.ENTITY_ITEM_PICKUP, 0.5F, 1.5F);
+
+            if (owner != null) {
+                owner.sendMessage(ChatColor.GREEN + agent.getName() + ChatColor.GRAY + " picked up " + stack.getType().name() + " x" + stack.getAmount());
+            }
+
+            queue.addFirst(action);
         }
     }
 

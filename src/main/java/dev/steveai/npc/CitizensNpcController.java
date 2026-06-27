@@ -159,6 +159,8 @@ public final class CitizensNpcController {
 
     private void prepareMortalNpc(NPC npc) {
         npc.setProtected(false);
+        npc.getNavigator().getDefaultParameters().speedModifier(1.35f);
+        npc.getNavigator().getDefaultParameters().attackRange(3.2D);
         makeMortal(npc.getEntity());
     }
 

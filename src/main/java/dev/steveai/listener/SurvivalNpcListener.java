@@ -5,6 +5,7 @@ import dev.steveai.agent.SteveAgent;
 import dev.steveai.npc.CitizensNpcController;
 import dev.steveai.storage.AgentStore;
 import dev.steveai.task.TaskRunner;
+import dev.steveai.plan.Plan;
 import net.citizensnpcs.api.CitizensAPI;
 import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.Bukkit;
@@ -19,14 +20,25 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 public final class SurvivalNpcListener implements Listener {
     private final AgentManager agentManager;
     private final TaskRunner taskRunner;
     private final CitizensNpcController npcController;
+    private final Map<UUID, String> openMenus = new HashMap<>();
+    private final Map<UUID, String> openInventories = new HashMap<>();
     private final AgentStore agentStore;
 
     public SurvivalNpcListener(
@@ -101,6 +113,12 @@ public final class SurvivalNpcListener implements Listener {
 
         agentManager.findByNpcId(npc.getId()).ifPresent(agent -> {
             if (!agent.isWounded()) {
+                if (agent.getOwnerId().equals(player.getUniqueId())) {
+                    event.setCancelled(true);
+                    Bukkit.getScheduler().runTask(dev.steveai.StevePaperAIPlugin.getPlugin(dev.steveai.StevePaperAIPlugin.class), () -> {
+                        openControlMenu(player, agent);
+                    });
+                }
                 return;
             }
 
@@ -141,6 +159,198 @@ public final class SurvivalNpcListener implements Listener {
                 agentStore.saveAsync(agentManager);
             }
         });
+    }
+
+    @EventHandler
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        UUID uuid = player.getUniqueId();
+        if (!openMenus.containsKey(uuid)) {
+            return;
+        }
+
+        event.setCancelled(true);
+        int slot = event.getRawSlot();
+        if (slot < 0 || slot >= 9) {
+            return;
+        }
+
+        String name = openMenus.get(uuid);
+        agentManager.find(name).ifPresent(agent -> {
+            player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 1.0F, 1.0F);
+            switch (slot) {
+                case 0 -> {
+                    agent.setFollowing(!agent.isFollowing());
+                    if (agent.isFollowing()) {
+                        agent.setSitting(false);
+                    }
+                    agentStore.saveAsync(agentManager);
+                    openControlMenu(player, agent);
+                }
+                case 1 -> {
+                    agent.setProtecting(!agent.isProtecting());
+                    agentStore.saveAsync(agentManager);
+                    openControlMenu(player, agent);
+                }
+                case 2 -> {
+                    agent.setSitting(!agent.isSitting());
+                    if (agent.isSitting()) {
+                        taskRunner.stopAgent(agent);
+                        agent.setSitting(true);
+                    }
+                    agentStore.saveAsync(agentManager);
+                    openControlMenu(player, agent);
+                }
+                case 4 -> {
+                    openMenus.remove(uuid);
+                    openAgentInventory(player, agent);
+                }
+                case 6 -> {
+                    player.closeInventory();
+                    Plan plan = new Plan(List.of(new dev.steveai.plan.PlanAction("collect_items", "", "", "", 20, 8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
+                    taskRunner.enqueue(agent, plan);
+                    agent.setSitting(false);
+                    agentStore.saveAsync(agentManager);
+                    player.sendMessage(ChatColor.GREEN + agent.getName() + ChatColor.GRAY + " is going to collect items.");
+                }
+                case 7 -> {
+                    player.closeInventory();
+                    Plan plan = new Plan(List.of(new dev.steveai.plan.PlanAction("chop_tree", "", "", "", 20, 12, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
+                    taskRunner.enqueue(agent, plan);
+                    agent.setSitting(false);
+                    agentStore.saveAsync(agentManager);
+                    player.sendMessage(ChatColor.GREEN + agent.getName() + ChatColor.GRAY + " is going to chop a tree.");
+                }
+                case 8 -> {
+                    player.closeInventory();
+                    Plan plan = new Plan(List.of(new dev.steveai.plan.PlanAction("mine_vein", "", "", "", 20, 12, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
+                    taskRunner.enqueue(agent, plan);
+                    agent.setSitting(false);
+                    agentStore.saveAsync(agentManager);
+                    player.sendMessage(ChatColor.GREEN + agent.getName() + ChatColor.GRAY + " is going to mine ores.");
+                }
+            }
+        });
+    }
+
+    @EventHandler
+    public void onInventoryClose(InventoryCloseEvent event) {
+        if (!(event.getPlayer() instanceof Player player)) {
+            return;
+        }
+        UUID uuid = player.getUniqueId();
+        openMenus.remove(uuid);
+
+        if (openInventories.containsKey(uuid)) {
+            String name = openInventories.remove(uuid);
+            agentManager.find(name).ifPresent(agent -> {
+                agent.clearInventory();
+                Inventory inv = event.getInventory();
+                for (int i = 0; i < 27; i++) {
+                    ItemStack item = inv.getItem(i);
+                    if (item != null && !item.getType().isAir()) {
+                        agent.addItem(item.getType(), item.getAmount());
+                    }
+                }
+                agentStore.saveAsync(agentManager);
+                player.playSound(player.getLocation(), Sound.BLOCK_CHEST_CLOSE, 1.0F, 1.0F);
+                player.sendMessage(ChatColor.GREEN + agent.getName() + "'s inventory has been updated.");
+            });
+        }
+    }
+
+    private void openControlMenu(Player player, SteveAgent agent) {
+        Inventory gui = Bukkit.createInventory(player, 9, ChatColor.GREEN + agent.getName() + "'s Control Menu");
+
+        ItemStack followItem = new ItemStack(agent.isFollowing() ? Material.LIME_WOOL : Material.RED_WOOL);
+        ItemMeta followMeta = followItem.getItemMeta();
+        if (followMeta != null) {
+            followMeta.setDisplayName(ChatColor.YELLOW + "Follow Owner: " + (agent.isFollowing() ? ChatColor.GREEN + "ON" : ChatColor.RED + "OFF"));
+            followMeta.setLore(List.of(ChatColor.GRAY + "Click to toggle follow mode."));
+            followItem.setItemMeta(followMeta);
+        }
+        gui.setItem(0, followItem);
+
+        ItemStack protectItem = new ItemStack(agent.isProtecting() ? Material.SHIELD : Material.LEATHER_CHESTPLATE);
+        ItemMeta protectMeta = protectItem.getItemMeta();
+        if (protectMeta != null) {
+            protectMeta.setDisplayName(ChatColor.YELLOW + "Protect Owner: " + (agent.isProtecting() ? ChatColor.GREEN + "ON" : ChatColor.RED + "OFF"));
+            protectMeta.setLore(List.of(ChatColor.GRAY + "Click to toggle protect mode."));
+            protectItem.setItemMeta(protectMeta);
+        }
+        gui.setItem(1, protectItem);
+
+        ItemStack sitItem = new ItemStack(agent.isSitting() ? Material.OAK_STAIRS : Material.OAK_PRESSURE_PLATE);
+        ItemMeta sitMeta = sitItem.getItemMeta();
+        if (sitMeta != null) {
+            sitMeta.setDisplayName(ChatColor.YELLOW + "State: " + (agent.isSitting() ? ChatColor.GOLD + "SITTING" : ChatColor.GREEN + "READY"));
+            sitMeta.setLore(List.of(ChatColor.GRAY + "Click to toggle sitting/standing."));
+            sitItem.setItemMeta(sitMeta);
+        }
+        gui.setItem(2, sitItem);
+
+        ItemStack invItem = new ItemStack(Material.CHEST);
+        ItemMeta invMeta = invItem.getItemMeta();
+        if (invMeta != null) {
+            invMeta.setDisplayName(ChatColor.AQUA + "Open Hòm Đồ");
+            invMeta.setLore(List.of(ChatColor.GRAY + "Click to open and manage Bob's items."));
+            invItem.setItemMeta(invMeta);
+        }
+        gui.setItem(4, invItem);
+
+        ItemStack collectItem = new ItemStack(Material.HOPPER);
+        ItemMeta collectMeta = collectItem.getItemMeta();
+        if (collectMeta != null) {
+            collectMeta.setDisplayName(ChatColor.LIGHT_PURPLE + "Collect Items");
+            collectMeta.setLore(List.of(ChatColor.GRAY + "Click to make Bob collect nearby items."));
+            collectItem.setItemMeta(collectMeta);
+        }
+        gui.setItem(6, collectItem);
+
+        ItemStack axeItem = new ItemStack(Material.IRON_AXE);
+        ItemMeta axeMeta = axeItem.getItemMeta();
+        if (axeMeta != null) {
+            axeMeta.setDisplayName(ChatColor.GREEN + "Chop Tree");
+            axeMeta.setLore(List.of(ChatColor.GRAY + "Click to make Bob chop a nearby tree."));
+            axeItem.setItemMeta(axeMeta);
+        }
+        gui.setItem(7, axeItem);
+
+        ItemStack pickaxeItem = new ItemStack(Material.IRON_PICKAXE);
+        ItemMeta pickaxeMeta = pickaxeItem.getItemMeta();
+        if (pickaxeMeta != null) {
+            pickaxeMeta.setDisplayName(ChatColor.GOLD + "Mine Ores");
+            pickaxeMeta.setLore(List.of(ChatColor.GRAY + "Click to make Bob mine nearby ores."));
+            pickaxeItem.setItemMeta(pickaxeMeta);
+        }
+        gui.setItem(8, pickaxeItem);
+
+        openMenus.put(player.getUniqueId(), agent.getName());
+        player.openInventory(gui);
+    }
+
+    private void openAgentInventory(Player player, SteveAgent agent) {
+        Inventory chest = Bukkit.createInventory(player, 27, ChatColor.DARK_GREEN + agent.getName() + "'s Inventory");
+
+        int slot = 0;
+        for (Map.Entry<Material, Integer> entry : agent.inventoryView().entrySet()) {
+            if (slot >= 27) {
+                break;
+            }
+            Material mat = entry.getKey();
+            int amount = entry.getValue();
+            while (amount > 0 && slot < 27) {
+                int stackAmount = Math.min(amount, mat.getMaxStackSize());
+                chest.setItem(slot++, new ItemStack(mat, stackAmount));
+                amount -= stackAmount;
+            }
+        }
+
+        openInventories.put(player.getUniqueId(), agent.getName());
+        player.openInventory(chest);
+        player.playSound(player.getLocation(), Sound.BLOCK_CHEST_OPEN, 1.0F, 1.0F);
     }
 
     @EventHandler
