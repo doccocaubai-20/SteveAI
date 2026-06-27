@@ -64,6 +64,11 @@ public final class AgentStore {
             agent.setSitting(section.getBoolean("sitting", false));
             agent.setDead(section.getBoolean("dead", false));
             agent.setWounded(section.getBoolean("wounded", false));
+            if (section.contains("long-term-memory")) {
+                for (String fact : section.getStringList("long-term-memory")) {
+                    agent.addLongTermMemory(fact);
+                }
+            }
             Material equipped = Material.matchMaterial(section.getString("equipped", "AIR"));
             agent.setEquippedItem(equipped == null ? Material.AIR : equipped);
             ConfigurationSection inv = section.getConfigurationSection("inventory");
@@ -99,6 +104,7 @@ public final class AgentStore {
             yaml.set(base + "sitting", agent.isSitting());
             yaml.set(base + "dead", agent.isDead());
             yaml.set(base + "wounded", agent.isWounded());
+            yaml.set(base + "long-term-memory", agent.getLongTermMemory());
             yaml.set(base + "equipped", agent.getEquippedItem().name());
             agent.inventoryView().forEach((material, amount) -> yaml.set(base + "inventory." + material.name(), amount));
         }
@@ -130,6 +136,7 @@ public final class AgentStore {
             yaml.set(base + "sitting", agent.isSitting());
             yaml.set(base + "dead", agent.isDead());
             yaml.set(base + "wounded", agent.isWounded());
+            yaml.set(base + "long-term-memory", agent.getLongTermMemory());
             yaml.set(base + "equipped", agent.getEquippedItem().name());
             agent.inventoryView().forEach((material, amount) -> yaml.set(base + "inventory." + material.name(), amount));
         }

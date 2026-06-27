@@ -30,7 +30,8 @@ public final class PlanParser {
         "craft_item",
         "open_nearest_container",
         "attack_nearest_hostile",
-        "flee_to_owner"
+        "flee_to_owner",
+        "remember_fact"
     );
 
     public Plan parse(String raw, int maxActions) {

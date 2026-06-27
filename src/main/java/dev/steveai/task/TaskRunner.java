@@ -5,6 +5,7 @@ import dev.steveai.agent.SteveAgent;
 import dev.steveai.npc.CitizensNpcController;
 import dev.steveai.plan.Plan;
 import dev.steveai.plan.PlanAction;
+import dev.steveai.storage.AgentStore;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
@@ -21,6 +22,8 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.Particle;
+import org.bukkit.Sound;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayDeque;
@@ -55,14 +58,18 @@ public final class TaskRunner {
     private final JavaPlugin plugin;
     private final AgentManager agentManager;
     private final CitizensNpcController npcController;
+    private final AgentStore agentStore;
     private final Map<String, ArrayDeque<PlanAction>> queues = new java.util.HashMap<>();
     private final Map<String, List<Location>> miningTargets = new java.util.HashMap<>();
+    private final Map<String, Location> lastLocations = new java.util.HashMap<>();
+    private final Map<String, Integer> stuckTicks = new java.util.HashMap<>();
     private BukkitTask task;
 
-    public TaskRunner(JavaPlugin plugin, AgentManager agentManager, CitizensNpcController npcController) {
+    public TaskRunner(JavaPlugin plugin, AgentManager agentManager, CitizensNpcController npcController, AgentStore agentStore) {
         this.plugin = plugin;
         this.agentManager = agentManager;
         this.npcController = npcController;
+        this.agentStore = agentStore;
     }
 
     public void start() {
@@ -87,6 +94,8 @@ public final class TaskRunner {
         String key = agent.getName().toLowerCase(Locale.ROOT);
         queues.remove(key);
         miningTargets.remove(key);
+        lastLocations.remove(key);
+        stuckTicks.remove(key);
         agent.setBusy(false);
         agent.setFollowing(false);
         agent.setProtecting(false);
@@ -98,6 +107,19 @@ public final class TaskRunner {
                 continue;
             }
             npcController.syncLocation(agent);
+            updateStuckReflexes(agent);
+
+            // Phản xạ né Creeper
+            if (updateFleeCreepers(agent)) {
+                continue;
+            }
+            // Phản xạ tự ăn hồi máu
+            updateAutoEating(agent);
+            // Phản xạ tự vệ
+            if (updateAutoDefense(agent)) {
+                continue;
+            }
+
             updateFollow(agent);
             updateProtect(agent);
             ArrayDeque<PlanAction> queue = queues.get(agent.getName().toLowerCase(Locale.ROOT));
@@ -135,8 +157,20 @@ public final class TaskRunner {
             case "open_nearest_container" -> openNearestContainer(agent, owner, action);
             case "attack_nearest_hostile" -> attackNearestHostile(agent, owner, queue, action.radius());
             case "flee_to_owner" -> fleeToOwner(agent, owner);
+            case "remember_fact" -> rememberFact(agent, owner, action.text());
             default -> plugin.getLogger().warning("Ignored unknown action: " + action.type());
         }
+    }
+
+    private void rememberFact(SteveAgent agent, Player owner, String fact) {
+        if (fact == null || fact.isBlank()) {
+            return;
+        }
+        agent.addLongTermMemory(fact);
+        if (owner != null) {
+            owner.sendMessage(ChatColor.GREEN + agent.getName() + ChatColor.GRAY + " remembered fact: " + fact);
+        }
+        agentStore.saveAsync(agentManager);
     }
 
     private void say(SteveAgent agent, Player owner, String text) {
@@ -230,6 +264,167 @@ public final class TaskRunner {
         }
         Optional<LivingEntity> hostile = nearestHostile(owner.getLocation(), plugin.getConfig().getInt("agent.protect-radius", 10));
         hostile.ifPresent(target -> attackEntity(agent, owner, target));
+    }
+
+    private boolean updateFleeCreepers(SteveAgent agent) {
+        Location center = npcController.currentLocation(agent).orElse(agent.getLocation());
+        org.bukkit.entity.Creeper dangerCreeper = null;
+        double radius = 4.5D;
+        for (Entity entity : center.getWorld().getNearbyEntities(center, radius, radius, radius)) {
+            if (entity instanceof org.bukkit.entity.Creeper creeper) {
+                if (!creeper.isDead()) {
+                    dangerCreeper = creeper;
+                    break;
+                }
+            }
+        }
+
+        if (dangerCreeper != null) {
+            Player owner = Bukkit.getPlayer(agent.getOwnerId());
+            Location target = null;
+            if (owner != null && owner.getWorld() == center.getWorld()) {
+                target = owner.getLocation();
+            } else {
+                org.bukkit.util.Vector dir = center.toVector().subtract(dangerCreeper.getLocation().toVector()).normalize();
+                target = center.clone().add(dir.multiply(5));
+            }
+            npcController.moveTo(agent, target);
+            if (Math.random() < 0.1) {
+                say(agent, owner, "Danger! Fleeing from Creeper!");
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private void updateAutoEating(SteveAgent agent) {
+        long now = System.currentTimeMillis();
+        if (now < agent.getEatCooldownUntil()) {
+            return;
+        }
+        Optional<Entity> entityOpt = npcController.currentEntity(agent);
+        if (entityOpt.isEmpty() || !(entityOpt.get() instanceof LivingEntity livingEntity)) {
+            return;
+        }
+
+        double health = livingEntity.getHealth();
+        if (health >= 16.0D) {
+            return;
+        }
+
+        Material foodMaterial = null;
+        for (Map.Entry<Material, Integer> entry : agent.inventoryView().entrySet()) {
+            if (entry.getKey().isEdible() && entry.getValue() > 0) {
+                foodMaterial = entry.getKey();
+                break;
+            }
+        }
+
+        if (foodMaterial != null) {
+            agent.removeItem(foodMaterial, 1);
+            livingEntity.setHealth(Math.min(20.0D, health + 4.0D));
+            Location loc = livingEntity.getLocation();
+            loc.getWorld().playSound(loc, Sound.ENTITY_PLAYER_BURP, 1.0F, 1.0F);
+            loc.getWorld().spawnParticle(Particle.VILLAGER_HAPPY, loc.add(0, 1, 0), 10, 0.3, 0.3, 0.3, 0.1);
+
+            Player owner = Bukkit.getPlayer(agent.getOwnerId());
+            if (owner != null) {
+                owner.sendMessage(ChatColor.GREEN + agent.getName() + ChatColor.GRAY + " ate " + foodMaterial.name() + " to heal. Health: " + String.format("%.1f", livingEntity.getHealth()) + "/20");
+            }
+            agent.remember("Automatically ate: " + foodMaterial.name());
+            agent.setEatCooldownUntil(now + 5000L);
+        }
+    }
+
+    private boolean updateAutoDefense(SteveAgent agent) {
+        LivingEntity attacker = agent.getLastAttacker();
+        if (attacker == null || attacker.isDead()) {
+            agent.setLastAttacker(null);
+            return false;
+        }
+
+        Optional<Location> npcLocation = npcController.currentLocation(agent);
+        if (npcLocation.isEmpty() || npcLocation.get().getWorld() != attacker.getWorld()
+            || npcLocation.get().distanceSquared(attacker.getLocation()) > 12.0D * 12.0D) {
+            agent.setLastAttacker(null);
+            return false;
+        }
+
+        Player owner = Bukkit.getPlayer(agent.getOwnerId());
+        attackEntity(agent, owner, attacker);
+        return true;
+    }
+
+    private void updateStuckReflexes(SteveAgent agent) {
+        Optional<net.citizensnpcs.api.npc.NPC> npcOpt = npcController.find(agent);
+        if (npcOpt.isEmpty()) {
+            return;
+        }
+        net.citizensnpcs.api.npc.NPC npc = npcOpt.get();
+        if (npc.isSpawned() && npc.getNavigator().isNavigating()) {
+            Entity entity = npc.getEntity();
+            Location currentLoc = entity.getLocation();
+            String key = agent.getName().toLowerCase(Locale.ROOT);
+            Location lastLoc = lastLocations.get(key);
+            int ticks = stuckTicks.getOrDefault(key, 0);
+
+            if (lastLoc != null && lastLoc.getWorld() == currentLoc.getWorld()) {
+                double dist = currentLoc.distance(lastLoc);
+                if (dist < 0.05D) {
+                    ticks++;
+                } else {
+                    ticks = 0;
+                }
+            }
+            lastLocations.put(key, currentLoc);
+            stuckTicks.put(key, ticks);
+
+            if (ticks >= 3) {
+                Player owner = Bukkit.getPlayer(agent.getOwnerId());
+
+                if (ticks >= 15) {
+                    if (owner != null && owner.getWorld() == currentLoc.getWorld()) {
+                        npcController.teleportTo(agent, owner.getLocation().add(1.0, 0, 1.0));
+                        say(agent, owner, "I got stuck! Teleported to you.");
+                    }
+                    stuckTicks.put(key, 0);
+                } else {
+                    if (entity instanceof LivingEntity livingEntity) {
+                        livingEntity.setVelocity(livingEntity.getVelocity().add(new org.bukkit.util.Vector(0, 0.42D, 0)));
+                    }
+
+                    org.bukkit.util.Vector dir = currentLoc.getDirection().normalize();
+                    Location frontLoc1 = currentLoc.clone().add(dir);
+                    Location frontLoc2 = currentLoc.clone().add(0, 1, 0).add(dir);
+
+                    tryDig(agent, frontLoc1.getBlock());
+                    tryDig(agent, frontLoc2.getBlock());
+                }
+            }
+        } else {
+            stuckTicks.put(agent.getName().toLowerCase(Locale.ROOT), 0);
+        }
+    }
+
+    private void tryDig(SteveAgent agent, Block block) {
+        if (block == null || block.getType().isAir() || !block.getType().isSolid()) {
+            return;
+        }
+        Material type = block.getType();
+        if (type == Material.BEDROCK || type == Material.OBSIDIAN || type == Material.BARRIER
+            || type == Material.CHEST || type == Material.FURNACE || type == Material.CRAFTING_TABLE
+            || type.name().contains("COMMAND") || type.name().contains("PORTAL")) {
+            return;
+        }
+        Material tool = chooseTool(agent, type);
+        npcController.equipMainHand(agent, tool);
+
+        for (ItemStack drop : block.getDrops(tool.isAir() ? new ItemStack(Material.AIR) : new ItemStack(tool))) {
+            agent.addItem(drop.getType(), drop.getAmount());
+        }
+        block.setType(Material.AIR);
+        block.getWorld().playEffect(block.getLocation(), org.bukkit.Effect.STEP_SOUND, type);
+        agent.remember("Cleared obstacle by digging: " + type.name());
     }
 
     private void moveNearBlock(SteveAgent agent, Player owner, PlanAction action) {

@@ -58,6 +58,12 @@ public final class SurvivalNpcListener implements Listener {
                 return;
             }
 
+            if (event instanceof org.bukkit.event.entity.EntityDamageByEntityEvent entityEvent) {
+                if (entityEvent.getDamager() instanceof LivingEntity damager) {
+                    agent.setLastAttacker(damager);
+                }
+            }
+
             double finalDamage = event.getFinalDamage();
             double currentHealth = livingEntity.getHealth();
             if (currentHealth - finalDamage <= 0.0D) {

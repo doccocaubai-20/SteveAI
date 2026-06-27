@@ -86,10 +86,11 @@ public final class DeepSeekClient implements LlmClient {
             + "Allowed actions: say{text}, wait{ticks}, move_near_owner{}, follow_owner{}, stop_following{}, protect_owner{}, stop_protecting{}, "
             + "move_near_block{material,radius}, break_owner_target_block{}, break_nearest_block{material,radius}, collect_items{radius}, "
             + "equip_best_tool{material}, place_block{material}, chop_tree{radius}, mine_vein{material,radius}, craft_item{material,amount}, "
-            + "open_nearest_container{material,radius}, attack_nearest_hostile{radius}, flee_to_owner{}. "
+            + "open_nearest_container{material,radius}, attack_nearest_hostile{radius}, flee_to_owner{}, remember_fact{text}. "
             + "Use inventory honestly: to place or craft, Steve must already have items. "
             + "Examples: follow me -> {\"actions\":[{\"type\":\"follow_owner\"}]}. "
             + "Protect me -> {\"actions\":[{\"type\":\"protect_owner\"}]}. "
+            + "Remember base -> {\"actions\":[{\"type\":\"remember_fact\",\"text\":\"Base is at 100 64 -200\"}]}. "
             + "Pick up drops -> {\"actions\":[{\"type\":\"collect_items\",\"radius\":6}]}. "
             + "Chop a tree -> {\"actions\":[{\"type\":\"chop_tree\",\"radius\":12},{\"type\":\"collect_items\",\"radius\":8}]}. "
             + "Mine iron vein -> {\"actions\":[{\"type\":\"mine_vein\",\"material\":\"IRON_ORE\",\"radius\":12}]}. "
@@ -100,6 +101,13 @@ public final class DeepSeekClient implements LlmClient {
 
     private String userPrompt(SteveAgent agent, String ownerName, String playerRequest) {
         Location loc = agent.getLocation();
+        String ltmSummary = String.join("\n- ", agent.getLongTermMemory());
+        if (ltmSummary.isEmpty()) {
+            ltmSummary = "None";
+        } else {
+            ltmSummary = "- " + ltmSummary;
+        }
+
         return "Agent: " + agent.getName() + "\n"
             + "Owner: " + ownerName + "\n"
             + "Mode: mortal survival helper\n"
@@ -108,6 +116,7 @@ public final class DeepSeekClient implements LlmClient {
             + "Inventory: " + agent.inventorySummary() + "\n"
             + "Agent location: " + loc.getWorld().getName() + " "
             + loc.getBlockX() + " " + loc.getBlockY() + " " + loc.getBlockZ() + "\n"
+            + "Long-term Facts:\n" + ltmSummary + "\n"
             + "Memory:\n" + agent.memorySummary() + "\n"
             + "Player request: " + playerRequest;
     }

@@ -2,13 +2,16 @@ package dev.steveai.agent;
 
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 
 import java.time.Instant;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
 import java.util.UUID;
@@ -18,6 +21,7 @@ public final class SteveAgent {
     private final UUID ownerId;
     private Location location;
     private final Deque<String> memory = new ArrayDeque<>();
+    private final List<String> longTermMemory = new ArrayList<>();
     private final Map<Material, Integer> inventory = new EnumMap<>(Material.class);
     private boolean busy;
     private boolean following;
@@ -26,6 +30,8 @@ public final class SteveAgent {
     private boolean wounded;
     private boolean sitting;
     private long attackCooldownUntil;
+    private long eatCooldownUntil;
+    private transient LivingEntity lastAttacker;
     private Integer citizensNpcId;
     private Material equippedItem = Material.AIR;
 
@@ -104,6 +110,14 @@ public final class SteveAgent {
         this.attackCooldownUntil = attackCooldownUntil;
     }
 
+    public long getEatCooldownUntil() {
+        return eatCooldownUntil;
+    }
+
+    public void setEatCooldownUntil(long eatCooldownUntil) {
+        this.eatCooldownUntil = eatCooldownUntil;
+    }
+
     public boolean isDead() {
         return dead;
     }
@@ -118,6 +132,30 @@ public final class SteveAgent {
 
     public void setWounded(boolean wounded) {
         this.wounded = wounded;
+    }
+
+    public LivingEntity getLastAttacker() {
+        return lastAttacker;
+    }
+
+    public void setLastAttacker(LivingEntity lastAttacker) {
+        this.lastAttacker = lastAttacker;
+    }
+
+    public List<String> getLongTermMemory() {
+        return longTermMemory;
+    }
+
+    public void addLongTermMemory(String fact) {
+        if (fact != null && !fact.isBlank() && !longTermMemory.contains(fact)) {
+            longTermMemory.add(fact);
+            remember("Remembered fact: " + fact);
+        }
+    }
+
+    public void clearLongTermMemory() {
+        longTermMemory.clear();
+        remember("Cleared all long-term memory.");
     }
 
     public Material getEquippedItem() {

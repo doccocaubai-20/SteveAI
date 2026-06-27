@@ -34,7 +34,7 @@ public final class StevePaperAIPlugin extends JavaPlugin {
         }
 
         this.agentStore.load(agentManager);
-        this.taskRunner = new TaskRunner(this, agentManager, npcController);
+        this.taskRunner = new TaskRunner(this, agentManager, npcController, agentStore);
         this.taskRunner.start();
 
         getServer().getPluginManager().registerEvents(new SurvivalNpcListener(agentManager, taskRunner, npcController, agentStore), this);
