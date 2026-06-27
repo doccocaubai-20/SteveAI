@@ -64,6 +64,7 @@ public final class TaskRunner {
     private final Map<String, Location> lastLocations = new java.util.HashMap<>();
     private final Map<String, Integer> stuckTicks = new java.util.HashMap<>();
     private final Map<String, Location> lastFollowTargets = new java.util.HashMap<>();
+    private final Map<String, LivingEntity> activeAttackTargets = new java.util.HashMap<>();
     private BukkitTask task;
 
     public TaskRunner(JavaPlugin plugin, AgentManager agentManager, CitizensNpcController npcController, AgentStore agentStore) {
@@ -98,6 +99,7 @@ public final class TaskRunner {
         lastLocations.remove(key);
         stuckTicks.remove(key);
         lastFollowTargets.remove(key);
+        activeAttackTargets.remove(key);
         agent.setBusy(false);
         agent.setFollowing(false);
         agent.setProtecting(false);
@@ -836,23 +838,55 @@ public final class TaskRunner {
     }
 
     private void attackEntity(SteveAgent agent, Player owner, LivingEntity target) {
-        long now = System.currentTimeMillis();
-        if (now < agent.getAttackCooldownUntil()) {
+        String key = agent.getName().toLowerCase(Locale.ROOT);
+        if (target == null || target.isDead()) {
+            activeAttackTargets.remove(key);
             return;
         }
-        Optional<Location> npcLocation = npcController.currentLocation(agent);
-        if (npcLocation.isEmpty() || npcLocation.get().distanceSquared(target.getLocation()) > 3.5D * 3.5D) {
-            npcController.moveTo(agent, target.getLocation());
+
+        Optional<net.citizensnpcs.api.npc.NPC> npcOpt = npcController.find(agent);
+        if (npcOpt.isEmpty() || !npcOpt.get().isSpawned()) {
             return;
         }
-        Material weapon = chooseBestFrom(agent, SWORDS).orElse(chooseBestFrom(agent, AXES).orElse(Material.AIR));
-        npcController.equipMainHand(agent, weapon);
-        Entity damager = npcController.currentEntity(agent).orElse(owner);
-        target.damage(weaponDamage(weapon), damager);
-        int cooldownTicks = plugin.getConfig().getInt("agent.attack-cooldown-ticks", 20);
-        agent.setAttackCooldownUntil(now + cooldownTicks * 50L);
-        if (owner != null) {
-            owner.sendMessage(ChatColor.GREEN + agent.getName() + ChatColor.GRAY + " attacked " + target.getType().name() + ".");
+        net.citizensnpcs.api.npc.NPC npc = npcOpt.get();
+
+        Location npcLoc = npc.getEntity().getLocation();
+        double distSq = npcLoc.distanceSquared(target.getLocation());
+
+        if (npcLoc.getWorld() != target.getWorld() || distSq > 14.0D * 14.0D) {
+            if (activeAttackTargets.containsKey(key)) {
+                npc.getNavigator().cancelNavigation();
+                activeAttackTargets.remove(key);
+            }
+            if (agent.getLastAttacker() == target) {
+                agent.setLastAttacker(null);
+            }
+            return;
+        }
+
+        LivingEntity currentChase = activeAttackTargets.get(key);
+        if (currentChase == null || currentChase != target || !npc.getNavigator().isNavigating()) {
+            npc.getNavigator().setTarget(target, true);
+            activeAttackTargets.put(key, target);
+        }
+
+        double attackRange = 3.2D;
+        if (distSq <= attackRange * attackRange) {
+            long now = System.currentTimeMillis();
+            if (now >= agent.getAttackCooldownUntil()) {
+                Material weapon = chooseBestFrom(agent, SWORDS).orElse(chooseBestFrom(agent, AXES).orElse(Material.AIR));
+                npcController.equipMainHand(agent, weapon);
+
+                Entity damager = npc.getEntity();
+                target.damage(weaponDamage(weapon), damager);
+
+                int cooldownTicks = plugin.getConfig().getInt("agent.attack-cooldown-ticks", 20);
+                agent.setAttackCooldownUntil(now + cooldownTicks * 50L);
+
+                if (owner != null) {
+                    owner.sendMessage(ChatColor.GREEN + agent.getName() + ChatColor.GRAY + " attacked " + target.getType().name() + ".");
+                }
+            }
         }
     }
 
